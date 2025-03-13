@@ -1,0 +1,11 @@
+# 忽略PM2配置文件
+ecosystem.config.js
+
+# 忽略构建输出目录
+dist/
+
+# 忽略依赖
+node_modules/
+
+# 忽略日志
+logs/ 

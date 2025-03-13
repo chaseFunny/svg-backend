@@ -1,0 +1,21 @@
+# THIS DOCKERFILE IS INTENDED FOR DEVELOPMENT ENVIRONMENTS
+# DO NOT USE THIS FOR PRODUCTION USAGES.
+
+version: '3'
+
+services:
+  postgresql:
+    image: docker.io/bitnami/postgresql:16
+    ports:
+      - '5432:5432'
+    volumes:
+      - 'postgresql_data:/bitnami/postgresql'
+    environment:
+      - ALLOW_EMPTY_PASSWORD=yes
+      - POSTGRESQL_DATABASE=nestjs
+      - POSTGRESQL_USERNAME=nestjs
+      - POSTGRESQL_PASSWORD=password
+
+volumes:
+  postgresql_data:
+    driver: local

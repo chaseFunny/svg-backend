@@ -1,0 +1,87 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id               Int             @id @default(autoincrement())
+  email            String?         @unique
+  username         String
+  password         String?
+  role             UserRole        @default(USER)
+  wechatOpenId     String?         @unique @map("wechat_open_id")
+  miniappOpenId    String?         @unique @map("miniapp_open_id")
+  remainingCredits Int             @default(5) @map("remaining_credits")
+  isInvited        Boolean         @default(false) @map("is_invited")
+  invitedBy        Int?            @map("invited_by")
+  inviter          User?           @relation("UserInvitations", fields: [invitedBy], references: [id])
+  invitees         User[]          @relation("UserInvitations")
+  createdAt        DateTime        @default(now()) @map("created_at")
+  updatedAt        DateTime        @updatedAt @map("updated_at")
+  isActive         Boolean         @default(true) @map("is_active")
+  isDeleted        Boolean         @default(false) @map("is_deleted")
+  lastLoginAt      DateTime?       @map("last_login_at")
+  svgGenerations   SvgGeneration[]
+
+  @@map("users")
+}
+
+model SvgGeneration {
+  id            Int          @id @default(autoincrement())
+  userId        Int          @map("user_id")
+  user          User         @relation(fields: [userId], references: [id])
+  inputContent  String       @map("input_content")
+  style         String?
+  aspectRatio   String?      @map("aspect_ratio")
+  configuration Json? // Stores additional configuration like size ratio, type, etc.
+  svgVersions   SvgVersion[] // Relationship to SVG versions
+  modelNames    String[]     @map("model_names") // Array of model names used for generation
+  title         String?
+  isPublic      Boolean      @default(false) @map("is_public")
+  shareToken    String?      @unique @map("share_token")
+  createdAt     DateTime     @default(now()) @map("created_at")
+  updatedAt     DateTime     @updatedAt @map("updated_at")
+
+  @@map("svg_generations")
+}
+
+model SvgVersion {
+  id            Int           @id @default(autoincrement())
+  generationId  Int           @map("generation_id")
+  generation    SvgGeneration @relation(fields: [generationId], references: [id])
+  svgContent    String        @map("svg_content")
+  svgModifyList Json?         @map("svg_modify_list") // 存储用户修改历史的列表
+  versionNumber Int           @map("version_number")
+  isAiGenerated Boolean       @default(true) @map("is_ai_generated")
+  createdAt     DateTime      @default(now()) @map("created_at")
+  lastEditedAt  DateTime?     @map("last_edited_at")
+  lastEditedBy  Int?          @map("last_edited_by")
+
+  @@unique([generationId, versionNumber])
+  @@map("svg_versions")
+}
+
+model EmailVerification {
+  id        Int      @id @default(autoincrement())
+  email     String
+  code      String
+  isUsed    Boolean  @default(false) @map("is_used")
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("email_verifications")
+}
+
+enum UserRole {
+  ADMIN
+  USER
+  VIP
+  GUEST
+}
