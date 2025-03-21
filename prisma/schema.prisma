@@ -18,7 +18,7 @@ model User {
   role             UserRole        @default(USER)
   wechatOpenId     String?         @unique @map("wechat_open_id")
   miniappOpenId    String?         @unique @map("miniapp_open_id")
-  remainingCredits Int             @default(5) @map("remaining_credits")
+  remainingCredits Int             @default(2) @map("remaining_credits")
   isInvited        Boolean         @default(false) @map("is_invited")
   invitedBy        Int?            @map("invited_by")
   inviter          User?           @relation("UserInvitations", fields: [invitedBy], references: [id])

@@ -20,7 +20,8 @@
     "pm2:stop": "pm2 stop ecosystem.config.js",
     "pm2:restart": "pm2 restart ecosystem.config.js",
     "pm2:delete": "pm2 delete ecosystem.config.js",
-    "pm2:logs": "pm2 logs svg-backend"
+    "pm2:logs": "pm2 logs svg-backend",
+    "send-apology": "env-cmd -f .env ts-node src/scripts/send-apology-emails.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^1.1.15",

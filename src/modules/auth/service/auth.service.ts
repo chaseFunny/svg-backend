@@ -147,7 +147,7 @@ export class AuthService {
                 email,
                 password: hashedPassword,
                 role: "USER",
-                remainingCredits: 5,
+                remainingCredits: 2,
                 isInvited,
                 invitedBy: inviterId,
             },

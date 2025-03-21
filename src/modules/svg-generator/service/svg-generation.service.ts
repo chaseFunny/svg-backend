@@ -1,5 +1,5 @@
 import { createOpenAI } from "@ai-sdk/openai";
-import { Injectable, NotFoundException } from "@nestjs/common";
+import { Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
 import { streamText } from "ai";
 import type { FastifyReply } from "fastify";
@@ -12,7 +12,7 @@ import {
     SvgVersionData,
 } from "../model";
 
-// 自定义响应接口，用于处理OpenAI的流式响应
+// 自定义响应接口，用于处理 OpenAI 的流式响应
 interface CustomStreamResponse {
     status: string;
     message?: string;
@@ -22,8 +22,8 @@ interface CustomStreamResponse {
 
 @Injectable()
 export class SvgGenerationService {
-    private readonly SVG_WIDTH = 800; // 固定SVG宽度为800px
-
+    private readonly SVG_WIDTH = 800; // 固定 SVG 宽度为 800px
+    private readonly logger = new Logger(SvgGenerationService.name);
     public constructor(private readonly prismaService: PrismaService) {}
 
     /**
@@ -68,7 +68,7 @@ export class SvgGenerationService {
             },
         });
 
-        // 转换为DTO，包含最新版本
+        // 转换为 DTO，包含最新版本
         const generationsWithVersions = generations.map((generation) => {
             const latestVersion = generation.svgVersions[0]
                 ? new SvgVersionData(generation.svgVersions[0])
@@ -114,7 +114,7 @@ export class SvgGenerationService {
             },
         });
 
-        // 转换为DTO，包含最新版本
+        // 转换为 DTO，包含最新版本
         const generationsWithVersions = generations.map((generation) => {
             const latestVersion = generation.svgVersions[0]
                 ? new SvgVersionData(generation.svgVersions[0])
@@ -169,11 +169,11 @@ export class SvgGenerationService {
     }
 
     /**
-     * 创建SVG生成（普通方式）
+     * 创建 SVG 生成（普通方式）
      *
-     * @param userId 用户ID
-     * @param data SVG生成详情
-     * @returns 创建的SVG生成
+     * @param userId 用户 ID
+     * @param data SVG 生成详情
+     * @returns 创建的 SVG 生成
      */
     public async create(
         userId: number,
@@ -185,7 +185,7 @@ export class SvgGenerationService {
         });
 
         if (!user) {
-            throw new NotFoundException(`用户ID ${userId} 不存在`);
+            throw new NotFoundException(`用户 ID ${userId} 不存在`);
         }
 
         if (user.remainingCredits <= 0) {
@@ -230,7 +230,7 @@ export class SvgGenerationService {
                 '<svg xmlns="http://www.w3.org/2000/svg" ' +
                 `viewBox="0 0 ${this.SVG_WIDTH} ${height}" ` +
                 `width="${this.SVG_WIDTH}" height="${height}">` +
-                '<text x="10" y="50">正在生成SVG...</text></svg>';
+                '<text x="10" y="50">正在生成 SVG...</text></svg>';
 
             await prisma.svgVersion.create({
                 data: {
@@ -248,11 +248,11 @@ export class SvgGenerationService {
     }
 
     /**
-     * 流式创建SVG生成
+     * 流式创建 SVG 生成
      *
-     * @param userId 用户ID
-     * @param data SVG生成详情
-     * @param reply Fastify响应对象，用于流式传输
+     * @param userId 用户 ID
+     * @param data SVG 生成详情
+     * @param reply Fastify 响应对象，用于流式传输
      */
     public async createStream(
         userId: number,
@@ -261,7 +261,7 @@ export class SvgGenerationService {
     ): Promise<void> {
         // 定义一个变量追踪响应是否已经结束
         let hasEnded = false;
-
+        this.logger.log(`开始流式创建 SVG 生成，用户 ID: ${userId}`);
         try {
             // 检查用户是否存在并且有足够的积分
             const user = await this.prismaService.user.findUnique({
@@ -269,7 +269,7 @@ export class SvgGenerationService {
             });
 
             if (!user) {
-                throw new NotFoundException(`用户ID ${userId} 不存在`);
+                throw new NotFoundException(`用户 ID ${userId} 不存在`);
             }
 
             if (user.remainingCredits <= 0) {
@@ -326,7 +326,7 @@ export class SvgGenerationService {
             try {
                 const startEvent = `data: ${JSON.stringify({
                     status: "started",
-                    message: "开始生成SVG",
+                    message: "开始生成 SVG",
                     id: generation.id,
                 } as CustomStreamResponse)}\n\n`;
                 reply.raw.write(startEvent);
@@ -338,19 +338,19 @@ export class SvgGenerationService {
                 if (rawReplyStart.flushHeaders) {
                     rawReplyStart.flushHeaders();
                 } else {
-                    // 备选方案：使用setTimeout强制微任务队列推进
+                    // 备选方案：使用 setTimeout 强制微任务队列推进
                     setTimeout(() => {
                         /* 强制微任务队列更新 */
                     }, 0);
                 }
             } catch (e) {
-                console.error("发送初始状态更新时出错:", e);
+                console.error("发送初始状态更新时出错：", e);
                 hasEnded = true;
-                throw e; // 重新抛出错误，让外层catch捕获
+                throw e; // 重新抛出错误，让外层 catch 捕获
             }
 
             try {
-                // 构建发送给API的提示
+                // 构建发送给 API 的提示
                 const fullPrompt = `You are an SVG graphic design expert, specializing in knowledge visualization and infographic design.
 Please analyze the following content: [${
                     data.inputContent
@@ -385,14 +385,14 @@ You only output raw SVG code, without any explanation or markdown formatting.
 Your SVG code is always valid, optimized, and visually pleasing.
 You carefully design each element to ensure the final diagram is both beautiful and effectively communicates information.`;
 
-                // 创建自定义的OpenAI客户端实例
+                // 创建自定义的 OpenAI 客户端实例
                 const customOpenAI = createOpenAI({
-                    apiKey: process.env.ANTHROPIC_API_KEY, // 使用请求提供的apiKey，如果没有则使用环境变量
-                    baseURL: process.env.ANTHROPIC_API_URL, // 使用请求提供的baseURL，如果没有则使用默认值
+                    apiKey: process.env.ANTHROPIC_API_KEY, // 使用请求提供的 apiKey，如果没有则使用环境变量
+                    baseURL: process.env.ANTHROPIC_API_URL, // 使用请求提供的 baseURL，如果没有则使用默认值
                 });
-                // 使用Vercel AI SDK的streamText函数
+                // 使用 Vercel AI SDK 的 streamText 函数
                 const streamResult = streamText({
-                    model: customOpenAI("claude-3-7-sonnet-20250219"),
+                    model: customOpenAI("claude-3-7-sonnet-all"),
                     system: systemPrompt,
                     prompt: fullPrompt,
                     maxTokens: 64000,
@@ -400,7 +400,13 @@ You carefully design each element to ensure the final diagram is both beautiful 
                     temperature: 0.1,
                     // 添加事件处理函数
                     onError: (error) => {
-                        console.error("AI生成过程中出错:", error);
+                        this.logger.error(
+                            `AI 生成过程中出错，用户 ID: ${userId}，错误信息：${
+                                error instanceof Error
+                                    ? error.message
+                                    : String(error)
+                            }`
+                        );
                         if (!hasEnded) {
                             try {
                                 const errorEvent = `data: ${JSON.stringify({
@@ -414,16 +420,15 @@ You carefully design each element to ensure the final diagram is both beautiful 
                                 } as CustomStreamResponse)}\n\n`;
                                 reply.raw.write(errorEvent);
                             } catch (writeError) {
-                                console.error(
-                                    "发送错误状态更新时出错:",
-                                    writeError
+                                this.logger.error(
+                                    `发送错误状态更新时出错，用户 ID: ${userId}，错误信息：${writeError}`
                                 );
                             }
                         }
                     },
                 });
 
-                let processedSvgContent = ""; // 用于收集处理后的SVG内容
+                let processedSvgContent = ""; // 用于收集处理后的 SVG 内容
 
                 // 处理流式响应
                 for await (const textPart of streamResult.textStream) {
@@ -450,7 +455,9 @@ You carefully design each element to ensure the final diagram is both beautiful 
                             rawReplyChunk.flushHeaders();
                         }
                     } catch (e) {
-                        console.error("发送数据块时出错:", e);
+                        this.logger.error(
+                            `发送数据块时出错，用户 ID: ${userId}，错误信息：${e}`
+                        );
                         if (!hasEnded) {
                             try {
                                 const errorEvent = `data: ${JSON.stringify({
@@ -462,10 +469,12 @@ You carefully design each element to ensure the final diagram is both beautiful 
                                 reply.raw.end();
                                 hasEnded = true;
                             } catch (endError) {
-                                console.error("尝试结束响应时出错:", endError);
+                                this.logger.error(
+                                    `尝试结束响应时出错，用户 ID: ${userId}，错误信息：${endError}`
+                                );
                             }
                         }
-                        throw e; // 重新抛出错误，让外层catch捕获
+                        throw e; // 重新抛出错误，让外层 catch 捕获
                     }
                 }
 
@@ -473,7 +482,7 @@ You carefully design each element to ensure the final diagram is both beautiful 
                 try {
                     const completeEvent = `data: ${JSON.stringify({
                         status: "completed",
-                        message: "SVG生成完成",
+                        message: "SVG 生成完成",
                         id: generation.id,
                     } as CustomStreamResponse)}\n\n`;
                     reply.raw.write(completeEvent);
@@ -486,23 +495,37 @@ You carefully design each element to ensure the final diagram is both beautiful 
                         rawReplyComplete.flushHeaders();
                     }
                 } catch (e) {
-                    console.error("发送完成状态更新时出错:", e);
+                    this.logger.error(
+                        `发送完成状态更新时出错，用户 ID: ${userId}，错误信息：${e}`
+                    );
                     if (!hasEnded) {
                         try {
                             reply.raw.end();
                             hasEnded = true;
                         } catch (endError) {
-                            console.error("尝试结束响应时出错:", endError);
+                            this.logger.error(
+                                `尝试结束响应时出错，用户 ID: ${userId}，错误信息：${endError}`
+                            );
                         }
                     }
-                    throw e; // 重新抛出错误，让外层catch捕获
+                    throw e; // 重新抛出错误，让外层 catch 捕获
                 }
-
-                // 将AI返回的SVG保存到数据库
+                this.logger.log(
+                    `AI 生成完成，用户 ID: ${userId}，生成 ID: ${generation.id}，生成内容：${processedSvgContent}`
+                );
+                // 将 AI 返回的 SVG 保存到数据库
                 await this.prismaService.svgVersion.create({
                     data: {
                         generationId: generation.id,
                         svgContent: this.cleanSvgContent(processedSvgContent),
+                        // 存储原始内容到 svgModifyList
+                        svgModifyList: [
+                            {
+                                content: processedSvgContent,
+                                timestamp: new Date().toISOString(),
+                                editedBy: userId,
+                            },
+                        ],
                         versionNumber: 1,
                         isAiGenerated: true,
                     },
@@ -520,10 +543,10 @@ You carefully design each element to ensure the final diagram is both beautiful 
                     data: { remainingCredits: { decrement: 1 } },
                 });
             } catch (error) {
-                // 如果API调用失败，将错误信息传递给前端
+                // 如果 API 调用失败，将错误信息传递给前端
                 const errorMessage =
                     error instanceof Error ? error.message : "未知错误";
-                console.error("API调用错误:", errorMessage);
+                console.error("API 调用错误：", errorMessage);
 
                 const errorEvent = `data: ${JSON.stringify({
                     status: "error",
@@ -542,7 +565,7 @@ You carefully design each element to ensure the final diagram is both beautiful 
             // 处理初始化或数据库错误
             const errorMessage =
                 error instanceof Error ? error.message : "未知错误";
-            console.error("初始化错误:", errorMessage);
+            console.error("初始化错误：", errorMessage);
 
             const errorEvent = `data: ${JSON.stringify({
                 status: "error",
@@ -566,25 +589,25 @@ You carefully design each element to ensure the final diagram is both beautiful 
                     reply.raw.write(finalErrorEvent);
                     reply.raw.end();
                 } catch (e) {
-                    console.error("尝试关闭响应时出错:", e);
+                    console.error("尝试关闭响应时出错：", e);
                 }
             }
         }
     }
 
     /**
-     * 更新SVG版本内容并记录修改历史
-     * @param versionId SVG版本ID
-     * @param svgContent 新的SVG内容
-     * @param userId 用户ID
-     * @returns 更新后的SVG版本数据
+     * 更新 SVG 版本内容并记录修改历史
+     * @param versionId SVG 版本 ID
+     * @param svgContent 新的 SVG 内容
+     * @param userId 用户 ID
+     * @returns 更新后的 SVG 版本数据
      */
     public async updateSvgVersion(
         versionId: number,
         svgContent: string,
         userId: number
     ): Promise<SvgVersionData> {
-        // 清理SVG内容，确保只包含有效的SVG代码
+        // 清理 SVG 内容，确保只包含有效的 SVG 代码
         const cleanedSvgContent = this.cleanSvgContent(svgContent);
 
         // 查找现有版本
@@ -593,7 +616,7 @@ You carefully design each element to ensure the final diagram is both beautiful 
         });
 
         if (!existingVersion) {
-            throw new NotFoundException(`SVG版本ID ${versionId} 不存在`);
+            throw new NotFoundException(`SVG 版本 ID ${versionId} 不存在`);
         }
 
         // 准备修改记录
@@ -607,7 +630,7 @@ You carefully design each element to ensure the final diagram is both beautiful 
         let modifyList: SvgModifyRecord[] = [];
         if (existingVersion.svgModifyList) {
             try {
-                // 安全地将JSON转换为SvgModifyRecord数组
+                // 安全地将 JSON 转换为 SvgModifyRecord 数组
                 const rawList = existingVersion.svgModifyList as unknown;
                 if (Array.isArray(rawList)) {
                     modifyList = rawList.filter(
@@ -620,16 +643,16 @@ You carefully design each element to ensure the final diagram is both beautiful 
                     ) as SvgModifyRecord[];
                 }
             } catch (e) {
-                console.error("解析修改历史失败:", e);
+                console.error("解析修改历史失败：", e);
                 modifyList = [];
             }
         }
 
         // 添加新的修改记录
-        // 限制修改历史记录为最新的10条
+        // 限制修改历史记录为最新的 10 条
         modifyList.unshift(modifyRecord);
         if (modifyList.length > 10) {
-            // 如果超过10条，删除最旧的一条记录（数组中的第一个元素）
+            // 如果超过 10 条，删除最旧的一条记录（数组中的第一个元素）
             modifyList.pop();
         }
 
@@ -648,11 +671,11 @@ You carefully design each element to ensure the final diagram is both beautiful 
     }
 
     /**
-     * 查询公开的SVG生成内容，支持分页，返回包含最新版本的生成记录
+     * 查询公开的 SVG 生成内容，支持分页，返回包含最新版本的生成记录
      *
-     * @param page 页码（从1开始）
+     * @param page 页码（从 1 开始）
      * @param pageSize 每页数量
-     * @returns 包含分页SVG生成内容及总数的对象
+     * @returns 包含分页 SVG 生成内容及总数的对象
      */
     public async findPublicPaginated(
         page: number,
@@ -680,7 +703,7 @@ You carefully design each element to ensure the final diagram is both beautiful 
             },
         });
 
-        // 转换为DTO，包含最新版本
+        // 转换为 DTO，包含最新版本
         const generationsWithVersions = generations.map((generation) => {
             const latestVersion = generation.svgVersions[0]
                 ? new SvgVersionData(generation.svgVersions[0])
@@ -692,11 +715,11 @@ You carefully design each element to ensure the final diagram is both beautiful 
     }
 
     /**
-     * 更新SVG生成记录的公开状态
+     * 更新 SVG 生成记录的公开状态
      *
-     * @param generationId SVG生成记录ID
+     * @param generationId SVG 生成记录 ID
      * @param isPublic 是否公开
-     * @returns 更新后的SVG生成记录
+     * @returns 更新后的 SVG 生成记录
      */
     public async updatePublicStatus(
         generationId: number,
@@ -709,7 +732,7 @@ You carefully design each element to ensure the final diagram is both beautiful 
 
         if (!generation) {
             throw new NotFoundException(
-                `未找到ID为${generationId}的SVG生成记录`
+                `未找到 ID 为${generationId}的 SVG 生成记录`
             );
         }
 
@@ -726,7 +749,7 @@ You carefully design each element to ensure the final diagram is both beautiful 
 
     /**
      * 根据宽高比计算高度
-     * 支持的格式: "16:9", "4:3", "1:1" 等
+     * 支持的格式："16:9", "4:3", "1:1" 等
      *
      * @private
      * @param aspectRatio 宽高比字符串
@@ -751,60 +774,136 @@ You carefully design each element to ensure the final diagram is both beautiful 
     /**
      * 清理 SVG 内容，提取纯 SVG 代码
      * 移除可能存在的 Markdown 代码块标记和其他非 SVG 内容
+     * 如果无法提取有效的 SVG，则返回默认的 AI 生成内容
      *
      * @private
      * @param svgContent 原始 SVG 内容
      * @returns 清理后的纯 SVG 代码
      */
     private cleanSvgContent(svgContent: string): string {
-        // 如果以 <svg 开头，则直接返回
-        if (svgContent.startsWith("<svg")) {
+        // 处理空内容情况
+        if (!svgContent || svgContent.trim() === "") {
+            return this.getDefaultSvg("无法解析内容");
+        }
+
+        // 如果已经是合法的完整SVG，直接返回
+        if (this.isValidFullSvg(svgContent)) {
             return svgContent;
         }
-        if (!svgContent) return svgContent;
 
-        // 移除各种可能的代码块标记
+        // 移除各种可能的代码块标记和前导/尾随空白
         const cleaned = svgContent
-            .replace(/```(svg|xml)?\s*/gi, "") // 删除开始的代码块标记（支持 ```svg 或 ```xml 或 ```）
+            .replace(/```(svg|xml|html)?\s*/gi, "") // 删除开始的代码块标记
             .replace(/```\s*$/g, "") // 删除结束的代码块标记
             .trim();
 
-        // 提取 <svg> 到 </svg> 之间的内容
-        const svgRegex = /<svg[\s\S]*?<\/svg>/i;
-        const match = cleaned.match(svgRegex);
+        // 尝试提取完整的SVG标签
+        const fullSvgRegex = /<svg[\s\S]*?<\/svg>/i;
+        const fullMatch = cleaned.match(fullSvgRegex);
 
-        if (match && match[0]) {
-            return match[0];
-        }
-
-        // 如果没有找到完整的 SVG 标签，但内容以 <svg 开头
-        if (cleaned.match(/<svg[\s\S]*$/i) && !cleaned.includes("</svg>")) {
-            // 添加闭合标签
-            return `${cleaned}</svg>`;
-        }
-
-        // 如果内容包含 </svg> 但不以 <svg 开头
-        if (!cleaned.match(/^[\s\S]*<svg/i) && cleaned.includes("</svg>")) {
-            // 尝试找到有效内容的开始
-            const startIndex = cleaned.indexOf("<");
-            if (startIndex >= 0) {
-                return `<svg>${cleaned.substring(startIndex)}</svg>`;
+        if (fullMatch && fullMatch[0]) {
+            const extractedSvg = fullMatch[0];
+            if (this.isValidFullSvg(extractedSvg)) {
+                return extractedSvg;
             }
         }
 
-        // 如果没有找到匹配的 SVG 标签，检查内容是否包含其他 XML/HTML 元素
-        if (cleaned.match(/<\w+[\s\S]*?>[\s\S]*?<\/\w+>/)) {
-            // 包装在 SVG 标签中
-            return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${this.SVG_WIDTH} ${this.SVG_WIDTH}">${cleaned}</svg>`;
+        // 尝试处理不完整的 SVG（有开始标签但没有结束标签）
+        const openTagRegex = /<svg[^>]*>/i;
+        const openTagMatch = cleaned.match(openTagRegex);
+
+        if (openTagMatch && openTagMatch[0]) {
+            const svgStart = cleaned.indexOf(openTagMatch[0]);
+            const svgContentFragment = cleaned.substring(svgStart);
+
+            // 如果有开始标签但没有结束标签，添加结束标签
+            if (!svgContentFragment.includes("</svg>")) {
+                return `${svgContentFragment}</svg>`;
+            }
+
+            // 提取从开始标签到首个结束标签的完整内容
+            const closingTagIndex = svgContentFragment.indexOf("</svg>") + 6;
+            if (closingTagIndex > 6) {
+                const extractedSvg = svgContentFragment.substring(
+                    0,
+                    closingTagIndex
+                );
+                if (this.isValidFullSvg(extractedSvg)) {
+                    return extractedSvg;
+                }
+            }
         }
 
-        // 如果没有找到任何明显的标签，但可能是 SVG 内的元素内容
-        if (cleaned.match(/(\w+="[\s\S]*?"|\w+='[\s\S]*?')/)) {
-            // 尝试作为 SVG 元素包装
-            return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${this.SVG_WIDTH} ${this.SVG_WIDTH}"><g>${cleaned}</g></svg>`;
+        // 尝试处理只有内容片段的情况（无 SVG 标签但有 SVG 元素）
+        if (
+            cleaned.match(
+                /<(circle|rect|path|g|text|line|polyline|polygon|ellipse)[\s\S]*?>/i
+            )
+        ) {
+            const svgWrapper = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${this.SVG_WIDTH} ${this.SVG_WIDTH}">${cleaned}</svg>`;
+            if (this.isValidFullSvg(svgWrapper)) {
+                return svgWrapper;
+            }
         }
 
-        // 如果确实没有找到任何 SVG 相关内容，返回原始清理后的内容
-        return cleaned;
+        // 兜底：无法提取到有效 SVG 内容时，返回默认 SVG
+        return this.getDefaultSvg("解析失败");
+    }
+
+    /**
+     * 验证是否为有效的完整 SVG
+     * @private
+     * @param svgContent SVG 内容
+     * @returns 是否为有效的完整 SVG
+     */
+    private isValidFullSvg(svgContent: string): boolean {
+        // 基本验证：必须包含开始和结束标签
+        if (!svgContent.match(/<svg[^>]*>[\s\S]*<\/svg>/i)) {
+            return false;
+        }
+
+        // 验证必要的属性：xmlns
+        let validatedSvg = svgContent;
+        if (!validatedSvg.includes('xmlns="http://www.w3.org/2000/svg"')) {
+            // 尝试修复缺少 xmlns 的 SVG
+            validatedSvg = validatedSvg.replace(
+                /<svg/i,
+                '<svg xmlns="http://www.w3.org/2000/svg"'
+            );
+        }
+
+        // 尝试解析 SVG（简单验证结构）
+        try {
+            // 确保是单个 SVG 根元素
+            const openTags = validatedSvg.match(/<svg/gi);
+            const closeTags = validatedSvg.match(/<\/svg>/gi);
+
+            return !!(
+                openTags &&
+                closeTags &&
+                openTags.length === 1 &&
+                closeTags.length === 1
+            );
+        } catch (e) {
+            return false;
+        }
+    }
+
+    /**
+     * 获取默认的 SVG 内容
+     * @private
+     * @param message 错误信息
+     * @returns 默认 SVG 内容
+     */
+    private getDefaultSvg(message: string): string {
+        return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${this.SVG_WIDTH} ${this.SVG_WIDTH}" width="${this.SVG_WIDTH}" height="${this.SVG_WIDTH}">
+<rect width="100%" height="100%" fill="#f8f9fa" />
+<text x="50%" y="50%" font-family="Arial" font-size="24" text-anchor="middle" dominant-baseline="middle" fill="#6c757d">
+    ${message} - AI 生成内容将稍后显示
+</text>
+<text x="50%" y="58%" font-family="Arial" font-size="16" text-anchor="middle" dominant-baseline="middle" fill="#6c757d">
+    请稍候或尝试重新生成
+</text>
+</svg>`;
     }
 }

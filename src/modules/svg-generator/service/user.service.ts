@@ -43,7 +43,7 @@ export class UserService {
                 wechatOpenId: data.wechatOpenId,
                 miniappOpenId: data.miniappOpenId,
                 role: "USER",
-                remainingCredits: 5,
+                remainingCredits: 2,
                 isInvited: false,
             },
         });

@@ -20,7 +20,7 @@ import { TokenBlacklistService } from "./service/token-blacklist.service";
             provide: Service.CONFIG,
             useValue: {
                 /* 配置值 */
-            }, // 或者useFactory/useClass
+            }, // 或者 useFactory/useClass
         },
     ],
     exports: [AuthService, JwtGuard],

@@ -10,7 +10,7 @@ CREATE TABLE "users" (
     "role" "UserRole" NOT NULL DEFAULT 'USER',
     "wechat_open_id" TEXT,
     "miniapp_open_id" TEXT,
-    "remaining_credits" INTEGER NOT NULL DEFAULT 5,
+    "remaining_credits" INTEGER NOT NULL DEFAULT 2,
     "is_invited" BOOLEAN NOT NULL DEFAULT false,
     "invited_by" INTEGER,
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
