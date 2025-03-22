@@ -56,12 +56,12 @@ export class SvgGeneratorController {
 
     @Get("public")
     @Public()
-    @ApiOperation({ summary: "查询公开的SVG生成内容，无需认证" })
-    @ApiQuery({ name: "page", required: false, description: "页码，默认为1" })
+    @ApiOperation({ summary: "查询公开的 SVG 生成内容，无需认证" })
+    @ApiQuery({ name: "page", required: false, description: "页码，默认为 1" })
     @ApiQuery({
         name: "pageSize",
         required: false,
-        description: "每页大小，默认为20，最大为24",
+        description: "每页大小，默认为 20，最大为 24",
     })
     @ApiResponse({
         status: HttpStatus.OK,
@@ -74,10 +74,10 @@ export class SvgGeneratorController {
         // 处理分页参数
         const pageNumber = page ? Math.max(1, parseInt(page, 10)) : 1;
         let pageSizeNumber = pageSize ? parseInt(pageSize, 10) : 20;
-        // 限制每页大小不超过24
+        // 限制每页大小不超过 24
         pageSizeNumber = Math.min(24, Math.max(1, pageSizeNumber));
 
-        // 查询公开的SVG生成内容
+        // 查询公开的 SVG 生成内容
         const result = await this.svgGenerationService.findPublicPaginated(
             pageNumber,
             pageSizeNumber
@@ -94,11 +94,11 @@ export class SvgGeneratorController {
     @Get()
     @ApiOperation({ summary: "Find SVG generations" })
     @ApiQuery({ name: "userId", required: false })
-    @ApiQuery({ name: "page", required: false, description: "页码，默认为1" })
+    @ApiQuery({ name: "page", required: false, description: "页码，默认为 1" })
     @ApiQuery({
         name: "pageSize",
         required: false,
-        description: "每页大小，默认为20，最大为24",
+        description: "每页大小，默认为 20，最大为 24",
     })
     @ApiResponse({
         status: HttpStatus.OK,
@@ -113,12 +113,12 @@ export class SvgGeneratorController {
         // 处理分页参数
         const pageNumber = page ? Math.max(1, parseInt(page, 10)) : 1;
         let pageSizeNumber = pageSize ? parseInt(pageSize, 10) : 20;
-        // 限制每页大小不超过24
+        // 限制每页大小不超过 24
         pageSizeNumber = Math.min(24, Math.max(1, pageSizeNumber));
 
         let result: { items: SvgGenerationWithVersionData[]; total: number };
 
-        // 根据是否有userId进行不同的查询
+        // 根据是否有 userId 进行不同的查询
         if (userId) {
             result = await this.svgGenerationService.findByUserIdPaginated(
                 parseInt(userId, 10),
@@ -129,7 +129,7 @@ export class SvgGeneratorController {
             // 检查当前用户是否为管理员
             if (request.user.role !== "ADMIN") {
                 throw new ForbiddenException(
-                    "没有权限查看所有SVG生成记录，只有管理员可以访问此功能"
+                    "没有权限查看所有 SVG 生成记录，只有管理员可以访问此功能"
                 );
             }
 
@@ -177,7 +177,11 @@ export class SvgGeneratorController {
             `Starting streamed SVG generation for user ${userId} with prompt: ${input.inputContent.substring(
                 0,
                 100
-            )}...`
+            )}... Model: ${
+                input.isThinking === "thinking"
+                    ? "claude-3-7-sonnet-latest-thinking"
+                    : "claude-3-7-sonnet-all"
+            }`
         );
         await this.svgGenerationService.createStream(
             parseInt(userId, 10),
@@ -196,7 +200,7 @@ export class SvgGeneratorController {
     }
 
     @Put("versions/:id")
-    @ApiOperation({ summary: "更新SVG版本内容" })
+    @ApiOperation({ summary: "更新 SVG 版本内容" })
     @ApiResponse({
         status: HttpStatus.OK,
         type: SvgVersionData,
@@ -213,7 +217,7 @@ export class SvgGeneratorController {
     }
 
     @Put(":id/public-status")
-    @ApiOperation({ summary: "更新SVG生成记录的公开状态（仅管理员）" })
+    @ApiOperation({ summary: "更新 SVG 生成记录的公开状态（仅管理员）" })
     @ApiResponse({
         status: HttpStatus.OK,
         type: SvgGenerationData,
@@ -226,7 +230,7 @@ export class SvgGeneratorController {
         // 检查当前用户是否为管理员
         if (request.user.role !== "ADMIN") {
             throw new ForbiddenException(
-                "只有管理员可以更新SVG生成记录的公开状态"
+                "只有管理员可以更新 SVG 生成记录的公开状态"
             );
         }
 

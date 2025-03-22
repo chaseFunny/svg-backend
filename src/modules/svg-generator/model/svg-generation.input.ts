@@ -23,6 +23,35 @@ export class SvgGenerationInput {
     public readonly aspectRatio?: string;
 
     @ApiProperty({
+        description: "是否使用 thinking 模型进行生成",
+        example: "base",
+        required: false,
+        enum: ["base", "thinking"],
+        default: "base",
+    })
+    public readonly isThinking?: string;
+
+    @ApiProperty({
+        description: "图片数据（Base64 编码字符串）",
+        required: false,
+    })
+    public readonly image?: string;
+
+    @ApiProperty({
+        description: "文件数据（Base64 编码字符串）",
+        required: false,
+    })
+    public readonly file?: string;
+
+    @ApiProperty({
+        description: "生成类型，决定系统 prompt 和 prompt 内容",
+        example: "default",
+        required: false,
+        default: "default",
+    })
+    public readonly type?: string;
+
+    @ApiProperty({
         description: "Additional configuration parameters",
         required: false,
     })

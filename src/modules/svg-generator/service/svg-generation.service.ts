@@ -221,7 +221,11 @@ export class SvgGenerationService {
                     inputContent: data.inputContent,
                     style: data.style,
                     configuration: configWithSize,
-                    modelNames: ["default-model"], // 这将被替换为实际的模型名称
+                    modelNames: [
+                        data.isThinking === "thinking"
+                            ? "claude-3-7-sonnet-latest-thinking"
+                            : "claude-3-7-sonnet-all",
+                    ], // 根据 isThinking 选择模型
                 },
             });
 
@@ -318,7 +322,11 @@ export class SvgGenerationService {
                     inputContent: data.inputContent,
                     style: data.style,
                     configuration: configWithSize,
-                    modelNames: ["gpt-4o"], // 更新为实际使用的模型
+                    modelNames: [
+                        data.isThinking === "thinking"
+                            ? "claude-3-7-sonnet-latest-thinking"
+                            : "gpt-4o",
+                    ], // 更新为实际使用的模型
                 },
             });
 
@@ -392,7 +400,11 @@ You carefully design each element to ensure the final diagram is both beautiful 
                 });
                 // 使用 Vercel AI SDK 的 streamText 函数
                 const streamResult = streamText({
-                    model: customOpenAI("claude-3-7-sonnet-all"),
+                    model: customOpenAI(
+                        data.isThinking === "thinking"
+                            ? "claude-3-7-sonnet-latest-thinking"
+                            : "claude-3-7-sonnet-all"
+                    ),
                     system: systemPrompt,
                     prompt: fullPrompt,
                     maxTokens: 64000,

@@ -9,6 +9,7 @@ export class SvgGenerationPipe extends JoiValidationPipe {
             inputContent: Joi.string().required(),
             style: Joi.string().optional(),
             aspectRatio: Joi.string().optional(),
+            isThinking: Joi.string().valid("base", "thinking").default("base"),
             configuration: Joi.object().optional(),
         });
     }
