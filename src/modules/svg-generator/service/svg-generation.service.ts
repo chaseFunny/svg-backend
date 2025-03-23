@@ -1,7 +1,7 @@
 import { createOpenAI } from "@ai-sdk/openai";
 import { Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
-import { streamText } from "ai";
+import { FilePart, ImagePart, streamText, TextPart } from "ai";
 import type { FastifyReply } from "fastify";
 import { PrismaService } from "../../common";
 import {
@@ -207,12 +207,7 @@ export class SvgGenerationService {
             });
 
             // 创建配置对象，包含宽高信息
-            const configWithSize = {
-                ...((data.configuration as Record<string, unknown>) || {}),
-                width: this.SVG_WIDTH,
-                height,
-                aspectRatio: data.aspectRatio || "1:1",
-            };
+            const configWithSize = this.prepareConfiguration(data, height);
 
             // 创建生成记录
             const generation = await prisma.svgGeneration.create({
@@ -220,12 +215,9 @@ export class SvgGenerationService {
                     userId,
                     inputContent: data.inputContent,
                     style: data.style,
+                    aspectRatio: data.aspectRatio,
                     configuration: configWithSize,
-                    modelNames: [
-                        data.isThinking === "thinking"
-                            ? "claude-3-7-sonnet-latest-thinking"
-                            : "claude-3-7-sonnet-all",
-                    ], // 根据 isThinking 选择模型
+                    modelNames: ["claude-3-7-sonnet-all"], // 默认使用标准模型
                 },
             });
 
@@ -308,25 +300,20 @@ export class SvgGenerationService {
             }
 
             // 创建配置对象，包含宽高信息
-            const configWithSize = {
-                ...((data.configuration as Record<string, unknown>) || {}),
-                width: this.SVG_WIDTH,
-                height,
-                aspectRatio: data.aspectRatio || "1:1",
-            };
-
+            const configWithSize = this.prepareConfiguration(data, height);
             // 创建生成记录
             const generation = await this.prismaService.svgGeneration.create({
                 data: {
                     userId,
                     inputContent: data.inputContent,
                     style: data.style,
+                    aspectRatio: data.aspectRatio,
                     configuration: configWithSize,
                     modelNames: [
                         data.isThinking === "thinking"
-                            ? "claude-3-7-sonnet-latest-thinking"
-                            : "gpt-4o",
-                    ], // 更新为实际使用的模型
+                            ? "claude-3-7-sonnet-thinking-all"
+                            : "claude-3-7-sonnet-all",
+                    ], // 根据 isThinking 选择模型
                 },
             });
 
@@ -345,11 +332,6 @@ export class SvgGenerationService {
                 };
                 if (rawReplyStart.flushHeaders) {
                     rawReplyStart.flushHeaders();
-                } else {
-                    // 备选方案：使用 setTimeout 强制微任务队列推进
-                    setTimeout(() => {
-                        /* 强制微任务队列更新 */
-                    }, 0);
                 }
             } catch (e) {
                 console.error("发送初始状态更新时出错：", e);
@@ -358,135 +340,204 @@ export class SvgGenerationService {
             }
 
             try {
-                // 构建发送给 API 的提示
-                const fullPrompt = `You are an SVG graphic design expert, specializing in knowledge visualization and infographic design.
-Please analyze the following content: [${
-                    data.inputContent
-                }] and create an elegant visual diagram.
-Design Process:
-1. First, identify the core concepts, relationships, and hierarchical structures in the content
-2. Determine the most suitable chart type to express this content (mind map, flowchart, relationship diagram, etc.)
-3. Create a visually appealing layout with attention to information flow and hierarchy
-4. Apply the "${
-                    data.style || "minimalist modern"
-                }" style to the overall visual design
-Design Principles:
-- Clear information hierarchy with distinct primary and secondary elements
-- Use appropriate visual metaphors to enhance content understanding
-- Ensure overall balance and harmony in the diagram
-- Optimize readability and avoid visual clutter
-Technical Requirements:
-1. Only return valid SVG code, do not include any explanation or markdown format
-2. The SVG root element must have viewBox="0 0 ${
-                    this.SVG_WIDTH
-                } ${height}",disallow width and height attributes
-3. Ensure the code is complete with all necessary tags and attributes
-4. Code should be concise and optimized, removing redundant elements
-5. Use readable fonts and appropriate font sizes
-6. Create harmonious color combinations with sufficient contrast
-7. The final SVG must be static (no animations) as it will be exported to an image
-
-Please generate complete SVG code that meets the above requirements.`;
-                const systemPrompt = `You are a world-class SVG graphic design expert, skilled at transforming complex information into visually engaging diagrams.
-You have a deep understanding of information design, visual hierarchy, and color theory.
-You only output raw SVG code, without any explanation or markdown formatting.
-Your SVG code is always valid, optimized, and visually pleasing.
-You carefully design each element to ensure the final diagram is both beautiful and effectively communicates information.`;
+                const { fullPrompt, systemPrompt } = this.getPrompts(
+                    data.type ?? "",
+                    data,
+                    this.SVG_WIDTH,
+                    height
+                );
 
                 // 创建自定义的 OpenAI 客户端实例
                 const customOpenAI = createOpenAI({
                     apiKey: process.env.ANTHROPIC_API_KEY, // 使用请求提供的 apiKey，如果没有则使用环境变量
                     baseURL: process.env.ANTHROPIC_API_URL, // 使用请求提供的 baseURL，如果没有则使用默认值
                 });
-                // 使用 Vercel AI SDK 的 streamText 函数
-                const streamResult = streamText({
-                    model: customOpenAI(
-                        data.isThinking === "thinking"
-                            ? "claude-3-7-sonnet-latest-thinking"
-                            : "claude-3-7-sonnet-all"
-                    ),
-                    system: systemPrompt,
-                    prompt: fullPrompt,
-                    maxTokens: 64000,
-                    abortSignal: AbortSignal.timeout(60000 * 10), // 设置 10 分钟超时
-                    temperature: 0.1,
-                    // 添加事件处理函数
-                    onError: (error) => {
-                        this.logger.error(
-                            `AI 生成过程中出错，用户 ID: ${userId}，错误信息：${
-                                error instanceof Error
-                                    ? error.message
-                                    : String(error)
-                            }`
-                        );
-                        if (!hasEnded) {
-                            try {
-                                const errorEvent = `data: ${JSON.stringify({
-                                    status: "error",
-                                    message: `生成SVG时出错： ${
-                                        error instanceof Error
-                                            ? error.message
-                                            : "未知错误"
-                                    }`,
-                                    id: generation.id,
-                                } as CustomStreamResponse)}\n\n`;
-                                reply.raw.write(errorEvent);
-                            } catch (writeError) {
-                                this.logger.error(
-                                    `发送错误状态更新时出错，用户 ID: ${userId}，错误信息：${writeError}`
-                                );
-                            }
-                        }
+                // 构建消息内容，包括文本和图片
+                const messageContent: Array<TextPart | ImagePart | FilePart> = [
+                    {
+                        type: "text",
+                        text: fullPrompt ?? "",
                     },
-                });
+                ];
+                if (configWithSize.config_image) {
+                    messageContent.push({
+                        type: "image",
+                        image: data.image as unknown as string,
+                        mimeType: (data.image as unknown as string)
+                            .split(";")[0]
+                            .split(":")[1],
+                        providerOptions: {
+                            anthropic: {
+                                type: "base64",
+                            },
 
-                let processedSvgContent = ""; // 用于收集处理后的 SVG 内容
+                            // "media-type": (data.image as unknown as string)
+                            //     .split(";")[0]
+                            //     .split(":")[1],
+                            // data: data.image as unknown as string,
+                        },
+                    });
+                }
+                if (configWithSize.fileContent) {
+                    messageContent.push({
+                        type: "file",
+                        data: configWithSize.fileContent as unknown as string,
+                        mimeType: (
+                            configWithSize.fileContent as unknown as string
+                        )
+                            .split(";")[0]
+                            .split(":")[1],
+                        providerOptions: {
+                            anthropic: {
+                                type: "base64",
+                            },
+                        },
+                    });
+                }
 
-                // 处理流式响应
-                for await (const textPart of streamResult.textStream) {
-                    // 防止响应已结束情况下继续写入
-                    if (hasEnded) break;
+                // 初始化变量以跟踪尝试的模型
+                let lastError: unknown = null;
+                let streamResult = null;
+                let success = false;
+                const currentModel =
+                    data.isThinking === "thinking"
+                        ? "claude-3-7-sonnet-thinking-all"
+                        : "claude-3-7-sonnet-all";
+                this.logger.log("messageContent:", messageContent);
+                try {
+                    // 使用当前模型调用 API
+                    // 定义基本的流选项
+                    const baseStreamOptions = {
+                        model: customOpenAI(currentModel),
+                        system: systemPrompt ?? "",
+                        maxTokens: 64000,
+                        abortSignal: AbortSignal.timeout(60000 * 20), // 设置 2 分钟超时
+                        temperature: 0.1,
+                        // 添加事件处理函数
+                        onError: (error: unknown) => {
+                            this.logger.error(
+                                `AI 生成过程中出错，用户 ID: ${userId}，模型：${
+                                    data.isThinking === "thinking"
+                                        ? "claude-3-7-sonnet-thinking-all"
+                                        : "claude-3-7-sonnet-all"
+                                }，错误信息：${JSON.stringify(error)}`
+                            );
+                            // 保存错误以便稍后重试其他模型
+                            lastError = error;
+                        },
+                    };
 
-                    processedSvgContent += textPart;
+                    // 根据是否有图片或文件内容，选择不同的调用方式
+                    if (
+                        configWithSize.config_image ||
+                        configWithSize.fileContent
+                    ) {
+                        // 使用 messages 格式以支持图片和文件
+                        this.logger.log(
+                            `使用带有多媒体内容的 messages 格式调用模型 ${currentModel}`
+                        );
+                        streamResult = streamText({
+                            ...baseStreamOptions,
+                            messages: [
+                                {
+                                    role: "user",
+                                    content: messageContent,
+                                },
+                            ],
+                        });
+                    } else {
+                        // 只有文本内容时使用 prompt 字段
+                        this.logger.log(
+                            `使用纯文本 prompt 字段调用模型 ${currentModel}`
+                        );
+                        streamResult = streamText({
+                            ...baseStreamOptions,
+                            prompt: fullPrompt ?? "",
+                        });
+                    }
 
-                    // 发送每个数据块到前端
-                    try {
-                        const chunkEvent = `data: ${JSON.stringify({
-                            status: "streaming",
+                    // 如果没有抛出异常，则标记为成功并退出循环
+                    success = true;
+                    this.logger.log(`成功使用模型：${currentModel}`);
+                } catch (error) {
+                    // 记录当前模型的失败
+                    this.logger.error(
+                        `模型 ${currentModel} 调用失败：${
+                            error instanceof Error ? error.message : "未知错误"
+                        }`
+                    );
+                    lastError = error;
+                }
+
+                // 如果所有模型都失败，返回错误
+                if (!success) {
+                    if (!hasEnded) {
+                        const errorMessage = this.parseAIError(lastError);
+                        const errorEvent = `data: ${JSON.stringify({
+                            status: "error",
+                            message: `所有可用模型都无法生成SVG: ${errorMessage}`,
                             id: generation.id,
-                            chunk: textPart,
                         } as CustomStreamResponse)}\n\n`;
 
-                        reply.raw.write(chunkEvent);
+                        reply.raw.write(errorEvent);
+                        reply.raw.end();
+                        hasEnded = true;
+                    }
+                    return;
+                }
 
-                        // 强制刷新缓冲区，确保数据立即发送给客户端
-                        const rawReplyChunk = reply.raw as unknown as {
-                            flushHeaders?: () => void;
-                        };
-                        if (rawReplyChunk.flushHeaders) {
-                            rawReplyChunk.flushHeaders();
-                        }
-                    } catch (e) {
-                        this.logger.error(
-                            `发送数据块时出错，用户 ID: ${userId}，错误信息：${e}`
+                let processedSvgContent = ""; // 用于收集处理后的 SVG 内容
+                this.logger.log("streamResult:", streamResult);
+                // 处理流式响应
+                if (streamResult && streamResult.textStream) {
+                    for await (const textPart of streamResult.textStream) {
+                        // 防止响应已结束情况下继续写入
+                        if (hasEnded) break;
+
+                        processedSvgContent += textPart;
+                        this.logger.log(
+                            "processedSvgContent:",
+                            processedSvgContent
                         );
-                        if (!hasEnded) {
-                            try {
-                                const errorEvent = `data: ${JSON.stringify({
-                                    status: "error",
-                                    message: "数据传输过程中断",
-                                    id: generation.id,
-                                } as CustomStreamResponse)}\n\n`;
-                                reply.raw.write(errorEvent);
-                                reply.raw.end();
-                                hasEnded = true;
-                            } catch (endError) {
-                                this.logger.error(
-                                    `尝试结束响应时出错，用户 ID: ${userId}，错误信息：${endError}`
-                                );
+                        // 发送每个数据块到前端
+                        try {
+                            const chunkEvent = `data: ${JSON.stringify({
+                                status: "streaming",
+                                id: generation.id,
+                                chunk: textPart,
+                            } as CustomStreamResponse)}\n\n`;
+
+                            reply.raw.write(chunkEvent);
+
+                            // 强制刷新缓冲区，确保数据立即发送给客户端
+                            const rawReplyChunk = reply.raw as unknown as {
+                                flushHeaders?: () => void;
+                            };
+                            if (rawReplyChunk.flushHeaders) {
+                                rawReplyChunk.flushHeaders();
                             }
+                        } catch (e) {
+                            this.logger.error(
+                                `发送数据块时出错，用户 ID: ${userId}，错误信息：${e}`
+                            );
+                            if (!hasEnded) {
+                                try {
+                                    const errorEvent = `data: ${JSON.stringify({
+                                        status: "error",
+                                        message: "数据传输过程中断",
+                                        id: generation.id,
+                                    } as CustomStreamResponse)}\n\n`;
+                                    reply.raw.write(errorEvent);
+                                    reply.raw.end();
+                                    hasEnded = true;
+                                } catch (endError) {
+                                    this.logger.error(
+                                        `尝试结束响应时出错，用户 ID: ${userId}，错误信息：${endError}`
+                                    );
+                                }
+                            }
+                            throw e; // 重新抛出错误，让外层 catch 捕获
                         }
-                        throw e; // 重新抛出错误，让外层 catch 捕获
                     }
                 }
 
@@ -552,14 +603,14 @@ You carefully design each element to ensure the final diagram is both beautiful 
                 // 减少用户积分
                 await this.prismaService.user.update({
                     where: { id: userId },
-                    data: { remainingCredits: { decrement: 1 } },
+                    data: {
+                        remainingCredits: { decrement: 1 },
+                    },
                 });
             } catch (error) {
                 // 如果 API 调用失败，将错误信息传递给前端
-                const errorMessage =
-                    error instanceof Error ? error.message : "未知错误";
-                console.error("API 调用错误：", errorMessage);
-
+                const errorMessage = this.parseAIError(error);
+                this.logger.error("API 调用错误：", errorMessage, hasEnded);
                 const errorEvent = `data: ${JSON.stringify({
                     status: "error",
                     message: `生成SVG时出错： ${errorMessage}`,
@@ -760,6 +811,200 @@ You carefully design each element to ensure the final diagram is both beautiful 
     }
 
     /**
+     * 准备配置对象，处理图片和文件数据
+     *
+     * @private
+     * @param data SVG 生成详情
+     * @param height 计算后的高度
+     * @returns 处理后的配置对象
+     */
+    private prepareConfiguration(
+        data: SvgGenerationInput,
+        height: number
+    ): Record<string, any> {
+        // 创建配置对象，包含宽高信息
+        const configWithSize: Record<string, any> = {
+            ...((data.configuration as Record<string, unknown>) || {}),
+            width: this.SVG_WIDTH,
+            height,
+            aspectRatio: data.aspectRatio || "1:1",
+        };
+
+        // 定义类型安全的图片和文件信息
+        type FileInfo = {
+            data: string;
+            mimeType: string;
+        };
+
+        // 如果有图片数据，确保正确存储到配置对象中，而不是单独的列
+        if (data.image) {
+            // 对于二进制数据，转换为 Base64
+            if (
+                data.image instanceof Uint8Array ||
+                Buffer.isBuffer(data.image) ||
+                data.image instanceof ArrayBuffer
+            ) {
+                let buffer: Buffer;
+
+                if (Buffer.isBuffer(data.image)) {
+                    buffer = data.image;
+                } else if (data.image instanceof Uint8Array) {
+                    buffer = Buffer.from(data.image);
+                } else {
+                    buffer = Buffer.from(new Uint8Array(data.image));
+                }
+
+                // 修改这里，使用 "config_image" 作为键，避免被误解为 image_data 列
+                configWithSize.config_image = `data:image/png;base64,${buffer.toString(
+                    "base64"
+                )}`;
+            } else if (typeof data.image === "string") {
+                // 字符串直接存储（假设它是 URL 或已经是 Base64）
+                configWithSize.config_image = data.image;
+            }
+        }
+
+        // 如果有文件数据，确保正确存储
+        if (data.file && data.file.data) {
+            const fileData = data.file.data;
+            const mimeType = data.file.mimeType;
+
+            // 对于二进制数据，转换为 Base64
+            if (
+                fileData instanceof Uint8Array ||
+                Buffer.isBuffer(fileData) ||
+                fileData instanceof ArrayBuffer
+            ) {
+                let buffer: Buffer;
+
+                if (Buffer.isBuffer(fileData)) {
+                    buffer = fileData;
+                } else if (fileData instanceof Uint8Array) {
+                    buffer = Buffer.from(fileData);
+                } else {
+                    buffer = Buffer.from(new Uint8Array(fileData));
+                }
+
+                configWithSize.fileContent = {
+                    data: `data:${mimeType};base64,${buffer.toString(
+                        "base64"
+                    )}`,
+                    mimeType,
+                } as FileInfo;
+            } else if (typeof fileData === "string") {
+                // 字符串直接存储
+                configWithSize.fileContent = {
+                    data: fileData,
+                    mimeType,
+                } as FileInfo;
+            }
+        }
+
+        return configWithSize;
+    }
+
+    /**
+     * 获取用于生成 SVG 的提示词
+     *
+     * @param type 提示词类型，"base"使用默认提示词，"custom"不使用提示词
+     * @param data SVG 生成输入数据
+     * @param width SVG 宽度
+     * @param height SVG 高度
+     * @returns 包含 fullPrompt 和 systemPrompt 的对象，或者空对象
+     */
+    private getPrompts(
+        type: string,
+        data: SvgGenerationInput,
+        width: number,
+        height: number
+    ): {
+        fullPrompt?: string;
+        systemPrompt?: string;
+    } {
+        if (type === "custom") {
+            return {
+                fullPrompt: "",
+                systemPrompt: "",
+            }; // 不使用提示词
+        }
+
+        // 默认提示词 (base)
+        const fullPrompt = `请根据提供的主题或内容，创建一个独特、引人注目且技术精湛的 SVG 图：
+[${data.inputContent}]`;
+
+        const systemPrompt = `你是一名专业的图形设计师和 SVG 开发专家，对视觉美学和技术实现有极高造诣。
+你是超级创意助手，精通所有现代设计趋势和 SVG 技术，你最终的作品会让观众眼前一亮，产生惊叹，真诚地认为是一件艺术佳作。
+我会给你一个主题、一段文本或一张参考图片，请分析它们，并将其转化为令人惊艳的 SVG 格式海报：
+## 内容要求
+- 保持原始主题的核心信息，但以更具视觉冲击力的方式呈现
+- 可搜索补充其他视觉元素或设计灵感，目的为增强海报的表现力
+## 设计风格
+- 根据主题选择合适的设计风格，优先使用：${
+            data.style || "极简现代"
+        }风格的视觉设计
+- 使用强烈的视觉层次结构，确保信息高效传达
+- 配色方案应富有表现力且和谐，符合主题情感
+- 字体选择考究，混合使用不超过三种字体，确保可读性与美感并存
+- 充分利用 SVG 的矢量特性，呈现精致细节和锐利边缘
+## 技术规范
+- 使用纯 SVG 格式，确保无损缩放和最佳兼容性
+- 代码整洁，结构清晰，包含适当注释
+- 优化 SVG 代码，删除不必要的元素和属性
+- 实现适当的动画效果（如果需要），使用 SVG 原生动画能力
+- SVG 总元素数量不应超过 200 个，确保渲染效率
+- 避免使用实验性或低兼容性的 SVG 特性
+## 兼容性要求
+- 设计必须在 Chrome、Firefox、Safari 等主流浏览器中正确显示
+- 确保所有关键内容在标准 viewBox 范围内完全可见
+- 验证 SVG 在移除所有高级效果（动画、滤镜）后仍能清晰传达核心信息
+- 避免依赖特定浏览器或平台的专有特性
+- 设置合理的文本大小，确保在多种缩放比例下均保持可读性
+## 尺寸与比例
+- 尺寸为 viewBox="0 0 ${width} ${height}"，不使用 width/height 属性
+- 确保所有文本和关键视觉元素在不同尺寸下保持清晰可读
+- 核心内容应位于视图中心区域，避免边缘布局
+- 测试设计在 300x300 至 1200x1200 像素范围内的显示效果
+## 图形与视觉元素
+- 创建原创矢量图形，展现主题的本质
+- 使用渐变、图案和滤镜等 SVG 高级特性增强视觉效果，但每个 SVG 限制在 3 种滤镜以内
+- 精心设计的构图，确保视觉平衡和动态张力
+- 适当使用负空间，避免过度拥挤的设计
+- 装饰元素不应干扰或掩盖主要信息
+## 视觉层次与排版
+- 建立清晰的视觉导向，引导观众视线
+- 文字排版精致，考虑中文字体的特性和美感
+- 标题、副标题和正文之间有明确区分
+- 使用大小、粗细、颜色和位置创建层次感
+- 确保所有文字内容在视觉设计中的优先级高于装饰元素
+## 性能优化
+- 确保 SVG 文件大小适中，避免不必要的复杂路径
+- 正确使用 SVG 元素（如 path、rect、circle 等）
+- 优化路径数据，删除冗余点和曲线
+- 合并可合并的路径和形状，减少总元素数
+- 简化复杂的形状，使用基本元素组合而非复杂路径
+- 避免过大的阴影和模糊效果，它们在某些环境中可能导致性能问题
+## 测试与验证
+- 在完成设计后，移除所有动画和高级滤镜，确认内容仍然完整可见
+- 检查元素是否使用了正确的 z-index，避免意外覆盖
+- 验证在不同视窗大小下所有内容都能正确显示
+- 确保设计采用分层方法：底层 (背景)、内容层和装饰层清晰分离
+- 提供简化版设计思路，去除所有可能影响稳定性的高级功能
+## 输出要求
+- 提供完整可用的 SVG 代码，可直接在浏览器中打开或嵌入网页
+- 确保代码有效且符合 SVG 标准，无错误警告
+- 附带简短说明，解释设计理念和关键视觉元素
+- 不偷懒不省略，全面展现你的设计思维和 SVG 专业知识
+- 使用 COT（思维链）方法：先分析主题，然后构思设计方案，最后生成 SVG 代码
+- 仅输出 SVG 代码，不包含任何解释或其他非 SVG 内容。示例输出：
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}">
+    <!-- 你的 SVG 内容 -->
+</svg>
+`;
+
+        return { fullPrompt, systemPrompt };
+    }
+
+    /**
      * 根据宽高比计算高度
      * 支持的格式："16:9", "4:3", "1:1" 等
      *
@@ -917,5 +1162,120 @@ You carefully design each element to ensure the final diagram is both beautiful 
     请稍候或尝试重新生成
 </text>
 </svg>`;
+    }
+
+    /**
+     * 解析 AI 错误信息，处理多种嵌套错误格式
+     *
+     * @private
+     * @param error 错误对象
+     * @returns 格式化的用户友好错误消息
+     */
+    private parseAIError(error: any): string {
+        // 默认错误信息
+        let errorMessage = "当前无可用模型，请稍后重试";
+
+        try {
+            // 如果是标准 Error 对象
+            if (error instanceof Error) {
+                errorMessage = error.message;
+            }
+            // 检查是否是对象
+            else if (typeof error === "object" && error !== null) {
+                // 1. 先检查直接的 error.message
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+                if (error.message) {
+                    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+                    errorMessage = String(error.message);
+                }
+
+                // 2. 检查 AI_RetryError 结构
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+                if (error.name === "AI_RetryError") {
+                    // 2.1 优先使用 lastError
+                    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+                    if (error.lastError?.data?.error?.message) {
+                        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+                        const msg = String(error.lastError.data.error.message);
+                        if (msg.includes("无可用渠道")) {
+                            return "AI 模型暂时不可用，请稍后再试或选择其他模型";
+                        }
+                        return msg;
+                    }
+
+                    // 2.2 使用 errors 数组中的第一个错误
+                    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+                    if (
+                        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+                        Array.isArray(error.errors) &&
+                        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+                        error.errors.length > 0
+                    ) {
+                        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment
+                        const firstError = error.errors[0];
+                        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+                        if (firstError.data?.error?.message) {
+                            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+                            const msg = String(firstError.data.error.message);
+                            if (msg.includes("无可用渠道")) {
+                                return "AI 模型暂时不可用，请稍后再试或选择其他模型";
+                            }
+                            return msg;
+                        }
+
+                        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+                        if (firstError.responseBody) {
+                            try {
+                                // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+                                const responseData = JSON.parse(
+                                    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-member-access
+                                    firstError.responseBody
+                                );
+                                // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+                                if (responseData.error?.message) {
+                                    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+                                    const msg = String(
+                                        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+                                        responseData.error.message
+                                    );
+                                    if (msg.includes("无可用渠道")) {
+                                        return "AI 模型暂时不可用，请稍后再试或选择其他模型";
+                                    }
+                                    return msg;
+                                }
+                            } catch (e) {
+                                // 解析 JSON 失败，忽略
+                            }
+                        }
+                    }
+                }
+
+                // 3. 检查 error.data.error.message 结构
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+                if (error.data?.error?.message) {
+                    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+                    const msg = String(error.data.error.message);
+                    if (msg.includes("无可用渠道")) {
+                        return "AI 模型暂时不可用，请稍后再试或选择其他模型";
+                    }
+                    return msg;
+                }
+
+                // 4. 尝试解析 error.data
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+                if (error.data && typeof error.data === "object") {
+                    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+                    if (error.data.message) {
+                        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+                        return String(error.data.message);
+                    }
+                }
+            }
+        } catch (e) {
+            // 解析过程中出错，返回默认错误信息
+            console.error("解析 AI 错误时出错", e);
+        }
+
+        return errorMessage;
     }
 }

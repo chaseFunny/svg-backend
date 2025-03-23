@@ -32,16 +32,19 @@ export class SvgGenerationInput {
     public readonly isThinking?: string;
 
     @ApiProperty({
-        description: "图片数据（Base64 编码字符串）",
+        description: "图片数据（可以是 Base64 编码字符串、URL 或二进制数据）",
         required: false,
     })
-    public readonly image?: string;
+    public readonly image?: string | Uint8Array | Buffer | ArrayBuffer;
 
     @ApiProperty({
-        description: "文件数据（Base64 编码字符串）",
+        description: "文件数据（可以是 Base64 编码字符串、URL 或二进制数据）",
         required: false,
     })
-    public readonly file?: string;
+    public readonly file?: {
+        data: string | Uint8Array | Buffer | ArrayBuffer;
+        mimeType: string;
+    };
 
     @ApiProperty({
         description: "生成类型，决定系统 prompt 和 prompt 内容",
