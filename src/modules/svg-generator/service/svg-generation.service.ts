@@ -281,23 +281,57 @@ export class SvgGenerationService {
             // 设置流式响应头
             reply.raw.writeHead(200, {
                 "Content-Type": "text/event-stream",
-                "Cache-Control": "no-cache",
-                "Content-Encoding": "utf-8",
+                "Cache-Control": "no-cache, no-transform",
                 Connection: "keep-alive",
-                "X-Accel-Buffering": "no", // 禁用Nginx缓冲（如果使用Nginx）
+                "X-Accel-Buffering": "no", // 禁用Nginx缓冲
+                "Transfer-Encoding": "chunked", // 使用分块传输编码
             });
 
             // 尝试禁用响应缓冲区
-            // 注意：Node.js的HTTP响应对象可能有不同实现
-            const rawResponse = reply.raw as unknown as {
-                socket?: { setNoDelay?: (noDelay: boolean) => void };
-            };
-            if (
-                rawResponse.socket &&
-                typeof rawResponse.socket.setNoDelay === "function"
-            ) {
-                rawResponse.socket.setNoDelay(true);
+            if (reply.raw.socket) {
+                // 设置TCP层不合并小包
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+                reply.raw.socket.setNoDelay?.(true);
+                // 尝试设置TCP保持活动状态
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+                reply.raw.socket.setKeepAlive?.(true, 30000);
             }
+
+            // 每30秒发送一个保持连接存活的心跳消息
+            const keepAliveInterval = setInterval(() => {
+                if (!hasEnded && !reply.raw.writableEnded) {
+                    try {
+                        // 发送注释消息作为心跳
+                        reply.raw.write(": keepalive\n\n");
+                    } catch (e) {
+                        this.logger.error(`发送心跳消息失败：${e}`);
+                    }
+                } else {
+                    clearInterval(keepAliveInterval);
+                }
+            }, 30000);
+
+            // 确保在函数结束时清除心跳定时器
+            const cleanup = () => {
+                clearInterval(keepAliveInterval);
+            };
+
+            // 响应结束时清理资源
+            reply.raw.on("close", () => {
+                this.logger.log("客户端连接已关闭");
+                cleanup();
+                hasEnded = true;
+            });
+
+            reply.raw.on("error", (err) => {
+                this.logger.error(
+                    `响应出错：${
+                        err instanceof Error ? err.message : String(err)
+                    }`
+                );
+                cleanup();
+                hasEnded = true;
+            });
 
             // 创建配置对象，包含宽高信息
             const configWithSize = this.prepareConfiguration(data, height);
@@ -402,7 +436,7 @@ export class SvgGenerationService {
                 const currentModel =
                     data.isThinking === "thinking"
                         ? "claude-3-7-sonnet-thinking-all"
-                        : "claude-3-7-sonnet-all";
+                        : "deepseek-chat";
                 this.logger.log("messageContent:", messageContent);
                 try {
                     // 使用当前模型调用 API
@@ -410,7 +444,8 @@ export class SvgGenerationService {
                     const baseStreamOptions = {
                         model: customOpenAI(currentModel),
                         system: systemPrompt ?? "",
-                        maxTokens: 64000,
+                        // maxTokens: 64000,
+                        maxTokens: 4096,
                         abortSignal: AbortSignal.timeout(60000 * 20), // 设置 2 分钟超时
                         temperature: 0.1,
                         // 添加事件处理函数
@@ -419,7 +454,7 @@ export class SvgGenerationService {
                                 `AI 生成过程中出错，用户 ID: ${userId}，模型：${
                                     data.isThinking === "thinking"
                                         ? "claude-3-7-sonnet-thinking-all"
-                                        : "claude-3-7-sonnet-all"
+                                        : "deepseek-chat"
                                 }，错误信息：${JSON.stringify(error)}`
                             );
                             // 保存错误以便稍后重试其他模型
@@ -490,55 +525,129 @@ export class SvgGenerationService {
                 this.logger.log("streamResult:", streamResult);
                 // 处理流式响应
                 if (streamResult && streamResult.textStream) {
-                    for await (const textPart of streamResult.textStream) {
-                        // 防止响应已结束情况下继续写入
-                        if (hasEnded) break;
-
-                        processedSvgContent += textPart;
-                        this.logger.log(
-                            "processedSvgContent:",
-                            processedSvgContent
-                        );
-                        // 发送每个数据块到前端
-                        try {
-                            const chunkEvent = `data: ${JSON.stringify({
-                                status: "streaming",
-                                id: generation.id,
-                                chunk: textPart,
-                            } as CustomStreamResponse)}\n\n`;
-
-                            reply.raw.write(chunkEvent);
-
-                            // 强制刷新缓冲区，确保数据立即发送给客户端
-                            const rawReplyChunk = reply.raw as unknown as {
-                                flushHeaders?: () => void;
-                            };
-                            if (rawReplyChunk.flushHeaders) {
-                                rawReplyChunk.flushHeaders();
+                    this.logger.log("准备处理 textStream，开始迭代...");
+                    let chunkCount = 0;
+                    try {
+                        for await (const textPart of streamResult.textStream) {
+                            // 防止响应已结束情况下继续写入
+                            if (hasEnded) {
+                                this.logger.log("响应已结束，停止处理流");
+                                break;
                             }
-                        } catch (e) {
-                            this.logger.error(
-                                `发送数据块时出错，用户 ID: ${userId}，错误信息：${e}`
+
+                            // 跳过空数据块
+                            if (!textPart || textPart.trim() === "") {
+                                this.logger.log("收到空数据块，跳过");
+                                continue;
+                            }
+
+                            chunkCount++;
+                            processedSvgContent += textPart;
+                            this.logger.log(
+                                `收到第 ${chunkCount} 个数据块，长度：${
+                                    textPart.length
+                                }字节，内容：${textPart.slice(0, 100)}`
                             );
-                            if (!hasEnded) {
-                                try {
-                                    const errorEvent = `data: ${JSON.stringify({
-                                        status: "error",
-                                        message: "数据传输过程中断",
-                                        id: generation.id,
-                                    } as CustomStreamResponse)}\n\n`;
-                                    reply.raw.write(errorEvent);
-                                    reply.raw.end();
-                                    hasEnded = true;
-                                } catch (endError) {
-                                    this.logger.error(
-                                        `尝试结束响应时出错，用户 ID: ${userId}，错误信息：${endError}`
+
+                            // 发送每个数据块到前端
+                            try {
+                                const chunkEvent = `data: ${JSON.stringify({
+                                    status: "streaming",
+                                    id: generation.id,
+                                    chunk: textPart,
+                                } as CustomStreamResponse)}\n\n`;
+
+                                const writeResult = reply.raw.write(chunkEvent);
+                                this.logger.log(
+                                    `数据块 ${chunkCount} 写入结果：${
+                                        writeResult ? "成功" : "缓冲区已满"
+                                    }`
+                                );
+
+                                // 如果缓冲区已满，等待 drain 事件
+                                if (!writeResult && !hasEnded) {
+                                    this.logger.log(
+                                        "缓冲区已满，等待 drain 事件..."
                                     );
+                                    await new Promise<void>((resolve) => {
+                                        const onDrain = () => {
+                                            reply.raw.removeListener(
+                                                "drain",
+                                                onDrain
+                                            );
+                                            resolve();
+                                        };
+                                        reply.raw.on("drain", onDrain);
+                                    });
+                                    this.logger.log("缓冲区已清空，继续写入");
                                 }
+
+                                // 强制刷新缓冲区，确保数据立即发送给客户端
+                                if (reply.raw.flushHeaders) {
+                                    reply.raw.flushHeaders();
+                                }
+
+                                // 额外尝试刷新
+                                const rawReply = reply.raw as {
+                                    flush?: () => void;
+                                };
+                                if (typeof rawReply.flush === "function") {
+                                    rawReply.flush();
+                                }
+                            } catch (e) {
+                                this.logger.error(
+                                    `发送数据块时出错，用户 ID: ${userId}，数据块 ${chunkCount}，错误信息：${e}`
+                                );
+                                if (!hasEnded) {
+                                    try {
+                                        const errorEvent = `data: ${JSON.stringify(
+                                            {
+                                                status: "error",
+                                                message: "数据传输过程中断",
+                                                id: generation.id,
+                                            } as CustomStreamResponse
+                                        )}\n\n`;
+                                        reply.raw.write(errorEvent);
+                                        reply.raw.end();
+                                        hasEnded = true;
+                                    } catch (endError) {
+                                        this.logger.error(
+                                            `尝试结束响应时出错，用户 ID: ${userId}，错误信息：${endError}`
+                                        );
+                                    }
+                                }
+                                throw e; // 重新抛出错误，让外层 catch 捕获
                             }
-                            throw e; // 重新抛出错误，让外层 catch 捕获
                         }
+                        this.logger.log(
+                            `流处理完成，共处理了 ${chunkCount} 个数据块`
+                        );
+                    } catch (streamError) {
+                        this.logger.error(
+                            `处理流时发生错误：${
+                                streamError instanceof Error
+                                    ? streamError.message
+                                    : "未知错误"
+                            }`
+                        );
+                        if (!hasEnded) {
+                            const errorEvent = `data: ${JSON.stringify({
+                                status: "error",
+                                message: `流处理错误: ${
+                                    streamError instanceof Error
+                                        ? streamError.message
+                                        : "未知错误"
+                                }`,
+                                id: generation.id,
+                            } as CustomStreamResponse)}\n\n`;
+                            reply.raw.write(errorEvent);
+                        }
+                        throw streamError;
                     }
+                } else {
+                    this.logger.warn(
+                        "streamResult 存在但 textStream 不可用或为空"
+                    );
                 }
 
                 // 发送完成状态
@@ -548,14 +657,25 @@ export class SvgGenerationService {
                         message: "SVG 生成完成",
                         id: generation.id,
                     } as CustomStreamResponse)}\n\n`;
-                    reply.raw.write(completeEvent);
+
+                    const writeResult = reply.raw.write(completeEvent);
+                    this.logger.log(
+                        `完成状态写入结果：${
+                            writeResult ? "成功" : "缓冲区已满"
+                        }`
+                    );
 
                     // 强制刷新缓冲区
-                    const rawReplyComplete = reply.raw as unknown as {
-                        flushHeaders?: () => void;
+                    if (reply.raw.flushHeaders) {
+                        reply.raw.flushHeaders();
+                    }
+
+                    // 额外尝试刷新
+                    const rawReplyComplete = reply.raw as {
+                        flush?: () => void;
                     };
-                    if (rawReplyComplete.flushHeaders) {
-                        rawReplyComplete.flushHeaders();
+                    if (typeof rawReplyComplete.flush === "function") {
+                        rawReplyComplete.flush();
                     }
                 } catch (e) {
                     this.logger.error(
@@ -933,11 +1053,18 @@ export class SvgGenerationService {
 [${data.inputContent}]`;
 
         const systemPrompt = `你是一名专业的图形设计师和 SVG 开发专家，对视觉美学和技术实现有极高造诣。
-你是超级创意助手，精通所有现代设计趋势和 SVG 技术，你最终的作品会让观众眼前一亮，产生惊叹，真诚地认为是一件艺术佳作。
-我会给你一个主题、一段文本或一张参考图片，请分析它们，并将其转化为令人惊艳的 SVG 格式海报：
+你是超级创意助手，精通所有现代设计趋势和 SVG 技术。你的任务是将文本描述转换为高质量的 SVG 代码。
+
+## 重要：输出格式要求
+- 你的回复必须且只能包含一个完整的 SVG 代码，不包含任何其他内容
+- 不要添加任何前言、解释、标记（如\`\`\`svg）或结语
+- 不要描述你的思考过程或设计理念
+- 不要在SVG代码前后添加任何文本
+
 ## 内容要求
-- 保持原始主题的核心信息，但以更具视觉冲击力的方式呈现
+- 保持原始主题的核心信息，但以更具视觉冲击力的方式呈现，默认背景白色
 - 可搜索补充其他视觉元素或设计灵感，目的为增强海报的表现力
+
 ## 设计风格
 - 根据主题选择合适的设计风格，优先使用：${
             data.style || "极简现代"
@@ -946,6 +1073,7 @@ export class SvgGenerationService {
 - 配色方案应富有表现力且和谐，符合主题情感
 - 字体选择考究，混合使用不超过三种字体，确保可读性与美感并存
 - 充分利用 SVG 的矢量特性，呈现精致细节和锐利边缘
+
 ## 技术规范
 - 使用纯 SVG 格式，确保无损缩放和最佳兼容性
 - 代码整洁，结构清晰，包含适当注释
@@ -953,29 +1081,34 @@ export class SvgGenerationService {
 - 实现适当的动画效果（如果需要），使用 SVG 原生动画能力
 - SVG 总元素数量不应超过 200 个，确保渲染效率
 - 避免使用实验性或低兼容性的 SVG 特性
+
 ## 兼容性要求
 - 设计必须在 Chrome、Firefox、Safari 等主流浏览器中正确显示
 - 确保所有关键内容在标准 viewBox 范围内完全可见
 - 验证 SVG 在移除所有高级效果（动画、滤镜）后仍能清晰传达核心信息
 - 避免依赖特定浏览器或平台的专有特性
 - 设置合理的文本大小，确保在多种缩放比例下均保持可读性
+
 ## 尺寸与比例
-- 尺寸为 viewBox="0 0 ${width} ${height}"，不使用 width/height 属性
-- 确保所有文本和关键视觉元素在不同尺寸下保持清晰可读
+- 尺寸为 viewBox="0 0 ${width} ${height}"
+- 不要添加width/height属性
 - 核心内容应位于视图中心区域，避免边缘布局
-- 测试设计在 300x300 至 1200x1200 像素范围内的显示效果
+
 ## 图形与视觉元素
 - 创建原创矢量图形，展现主题的本质
 - 使用渐变、图案和滤镜等 SVG 高级特性增强视觉效果，但每个 SVG 限制在 3 种滤镜以内
 - 精心设计的构图，确保视觉平衡和动态张力
-- 适当使用负空间，避免过度拥挤的设计
+- 避免过度拥挤的设计，避免元素被完全遮挡
 - 装饰元素不应干扰或掩盖主要信息
+- 所有元素都在viewBox范围内
+
 ## 视觉层次与排版
 - 建立清晰的视觉导向，引导观众视线
 - 文字排版精致，考虑中文字体的特性和美感
 - 标题、副标题和正文之间有明确区分
 - 使用大小、粗细、颜色和位置创建层次感
 - 确保所有文字内容在视觉设计中的优先级高于装饰元素
+
 ## 性能优化
 - 确保 SVG 文件大小适中，避免不必要的复杂路径
 - 正确使用 SVG 元素（如 path、rect、circle 等）
@@ -983,23 +1116,17 @@ export class SvgGenerationService {
 - 合并可合并的路径和形状，减少总元素数
 - 简化复杂的形状，使用基本元素组合而非复杂路径
 - 避免过大的阴影和模糊效果，它们在某些环境中可能导致性能问题
-## 测试与验证
-- 在完成设计后，移除所有动画和高级滤镜，确认内容仍然完整可见
-- 检查元素是否使用了正确的 z-index，避免意外覆盖
-- 验证在不同视窗大小下所有内容都能正确显示
-- 确保设计采用分层方法：底层 (背景)、内容层和装饰层清晰分离
-- 提供简化版设计思路，去除所有可能影响稳定性的高级功能
-## 输出要求
-- 提供完整可用的 SVG 代码，可直接在浏览器中打开或嵌入网页
-- 确保代码有效且符合 SVG 标准，无错误警告
-- 附带简短说明，解释设计理念和关键视觉元素
-- 不偷懒不省略，全面展现你的设计思维和 SVG 专业知识
-- 使用 COT（思维链）方法：先分析主题，然后构思设计方案，最后生成 SVG 代码
-- 仅输出 SVG 代码，不包含任何解释或其他非 SVG 内容。示例输出：
+
+## 严格输出格式
+- 直接输出SVG代码，不添加任何其他文本、标记或注释
+- 回复中必须以<svg开头，以</svg>结尾
+- 不要在SVG前后添加任何说明性文字或代码块标记
+- 这一点极其重要：无论如何都只输出纯SVG代码，没有其他任何内容
+
+你的输出应该是这样的格式：
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}">
-    <!-- 你的 SVG 内容 -->
-</svg>
-`;
+    <!-- SVG内容 -->
+</svg>`;
 
         return { fullPrompt, systemPrompt };
     }
